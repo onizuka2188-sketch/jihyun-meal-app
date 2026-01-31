@@ -1,35 +1,51 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Calendar, ChefHat, RefreshCw, Loader2, Key, Heart, Info, AlertCircle, Printer, History, Settings, Save, Search, BookOpen, Utensils, CheckCircle2, Database, WifiOff, ExternalLink } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
+import { 
+  Calendar, ChefHat, RefreshCw, Loader2, Key, Heart, Info, 
+  AlertCircle, Printer, History, Settings, Save, Search, 
+  BookOpen, Utensils, CheckCircle2, Database, WifiOff, ExternalLink 
+} from 'lucide-react';
+import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, onSnapshot, addDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
-// --- 환경 변수 로드 (안전한 접근 방식) ---
-const getEnvVar = (key) => {
+/**
+ * 환경 변수 안전 로드 함수
+ * import.meta.env 에러 방지를 위해 try-catch 적용
+ */
+const getEnvValue = (key) => {
   if (typeof window !== 'undefined' && window[key]) return window[key];
   try {
-    const viteKey = `VITE_${key.replace('__', '').toUpperCase()}`;
+    const viteKey = `VITE_${key.toUpperCase()}`;
+    // import.meta.env 접근 전 존재 여부 확인
     if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[viteKey]) {
       return import.meta.env[viteKey];
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn("Env access failed:", key);
+  }
   return null;
 };
 
-const firebaseConfigRaw = getEnvVar('__firebase_config');
-const firebaseConfig = firebaseConfigRaw ? JSON.parse(firebaseConfigRaw) : null;
-const appId = getEnvVar('__app_id') || 'jihyun-meal-app-v2';
-const initialAuthToken = getEnvVar('__initial_auth_token');
+// Firebase 설정 및 초기화
+const firebaseConfigRaw = getEnvValue('FIREBASE_CONFIG');
+let firebaseConfig = null;
+try {
+  firebaseConfig = firebaseConfigRaw ? JSON.parse(firebaseConfigRaw) : null;
+} catch (e) {
+  console.error("Firebase config parse error");
+}
 
-// Firebase 서비스 초기화
+const appId = getEnvValue('APP_ID') || 'jihyun-hospital-app';
+const initialAuthToken = getEnvValue('INITIAL_AUTH_TOKEN');
+
 let app, auth, db;
-if (firebaseConfig) {
+if (firebaseConfig && getApps().length === 0) {
   try {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
   } catch (e) {
-    console.error("Firebase 초기화 에러:", e);
+    console.error("Firebase init error:", e);
   }
 }
 
@@ -47,7 +63,7 @@ const App = () => {
   const [recipeQuery, setRecipeQuery] = useState("");
   const [currentRecipe, setCurrentRecipe] = useState(null);
 
-  // 1. 인증 처리
+  // 인증 로직
   useEffect(() => {
     if (!auth) { 
       setAuthLoading(false); 
@@ -55,14 +71,10 @@ const App = () => {
     }
     const initAuth = async () => {
       try {
-        if (initialAuthToken) {
-          await signInWithCustomToken(auth, initialAuthToken);
-        } else {
-          await signInAnonymously(auth);
-        }
+        if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
+        else await signInAnonymously(auth);
       } catch (err) { 
-        console.error("인증 실패:", err);
-        setError("인증 서버 연결에 실패했습니다.");
+        console.error("Auth error:", err);
       } finally {
         setAuthLoading(false);
       }
@@ -72,145 +84,97 @@ const App = () => {
     return () => unsubscribe();
   }, []);
 
-  // 2. 실시간 데이터 로드
+  // 데이터 로드
   useEffect(() => {
     if (!user || !db) return;
 
-    // 히스토리 리스너
     const historyRef = collection(db, 'artifacts', appId, 'public', 'data', 'meal_history');
     const unsubHistory = onSnapshot(historyRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setHistoryList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-    }, (err) => console.error("히스토리 로드 실패:", err));
+    }, () => {});
 
-    // 레시피 리스너
     const recipeRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
     const unsubRecipes = onSnapshot(recipeRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setRecipeList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-    }, (err) => console.error("레시피 로드 실패:", err));
+    }, () => {});
 
-    // 설정 리스너
     const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setUserSettings(docSnap.data());
-      }
-    }, (err) => console.error("설정 로드 실패:", err));
+      if (docSnap.exists()) setUserSettings(docSnap.data());
+    }, () => {});
 
     return () => { unsubHistory(); unsubRecipes(); unsubSettings(); };
   }, [user]);
 
   const getApiKey = useCallback(() => {
-    return userSettings.geminiKey || getEnvVar('gemini_api_key') || "";
+    return userSettings.geminiKey || getEnvValue('GEMINI_API_KEY') || "";
   }, [userSettings.geminiKey]);
 
-  // 4. 설정 저장 함수
   const handleSaveSettings = async () => {
-    if (!db) {
-      setError("시스템 설정(VITE_FIREBASE_CONFIG)이 필요합니다.");
+    if (!db || !user) {
+      setError("데이터베이스 연결이 필요합니다. Vercel 설정을 확인하세요.");
       return;
     }
-    if (!user) {
-      setError("사용자 인증 대기 중입니다.");
-      return;
-    }
-
     setLoading(true);
     setError(null);
-    setSaveStatus(null);
-    
     try {
       const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config');
       await setDoc(settingsRef, userSettings, { merge: true });
       setSaveStatus('success');
-      setTimeout(() => {
-        setSaveStatus(null);
-        setActiveTab('planner');
-      }, 1500);
+      setTimeout(() => { setSaveStatus(null); setActiveTab('planner'); }, 1500);
     } catch (err) {
-      console.error("저장 에러:", err);
-      setError("데이터베이스 저장에 실패했습니다.");
+      setError("저장에 실패했습니다.");
     } finally {
       setLoading(false);
     }
   };
 
-  // 5. 식단 생성
   const generateWeeklyPlan = async () => {
     const key = getApiKey();
-    if (!key) { 
-      setError("설정 탭에서 Gemini API 키를 먼저 저장해 주세요."); 
-      setActiveTab('settings'); 
-      return; 
-    }
-    setLoading(true); 
-    setError(null);
-    
-    const prompt = `당신은 전문 영양사입니다. 병원 주간 식단표(7일치)를 JSON 형식으로 생성하세요. 각 날짜(date)는 "1/12(월)" 형식이어야 하며, breakfast, lunch, dinner(각 5개 메뉴), snack(1개 메뉴)을 포함하세요.`;
-    
+    if (!key) { setError("Gemini API 키를 먼저 등록해주세요."); setActiveTab('settings'); return; }
+    setLoading(true); setError(null);
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${key}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          systemInstruction: { parts: [{ text: "병원 식단 전문가로서 JSON {days: []} 형식으로만 답변하세요." }] },
+          contents: [{ parts: [{ text: "신도시이진병원 스타일의 주간 식단표를 짜줘." }] }],
+          systemInstruction: { parts: [{ text: "영양사로서 JSON {days: []} 형식으로만 답하세요." }] },
           generationConfig: { responseMimeType: "application/json" }
         })
       });
-
-      if (!res.ok) throw new Error("API 응답 오류");
-      
       const result = await res.json();
       const data = JSON.parse(result.candidates[0].content.parts[0].text);
       setWeeklyPlan(data.days);
-      
-      if (db && user) {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'meal_history'), { 
-          plan: data.days, 
-          createdAt: serverTimestamp(), 
-          userId: user.uid 
-        });
-      }
-    } catch (err) { 
-      setError("식단 생성에 실패했습니다. API 키가 유효한지 확인하세요."); 
-    } finally { 
-      setLoading(false); 
+      if (db && user) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'meal_history'), { plan: data.days, createdAt: serverTimestamp(), userId: user.uid });
+    } catch (err) {
+      setError("식단 생성에 실패했습니다.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  // 6. 레시피 생성
-  const generateRecipe = async (query) => {
+  const generateRecipe = async (q) => {
     const key = getApiKey();
-    if (!key) { setError("설정에서 API 키를 입력하세요."); setActiveTab('settings'); return; }
-    setLoading(true); 
-    setError(null);
+    if (!key || !q) return;
+    setLoading(true); setError(null);
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${key}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `${query}의 상세 레시피를 병원 환자식 기준으로 알려줘.` }] }],
-          systemInstruction: { parts: [{ text: "JSON 형식으로 답변하세요: {title, ingredients: [], steps: []}" }] },
+          contents: [{ parts: [{ text: `${q} 레시피를 병원식으로 알려줘.` }] }],
+          systemInstruction: { parts: [{ text: "JSON {title, ingredients: [], steps: []} 형식으로 답하세요." }] },
           generationConfig: { responseMimeType: "application/json" }
         })
       });
       const result = await res.json();
       const data = JSON.parse(result.candidates[0].content.parts[0].text);
       setCurrentRecipe(data);
-      if (db && user) {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'recipes'), { 
-          ...data, 
-          createdAt: serverTimestamp(), 
-          userId: user.uid 
-        });
-      }
-    } catch (err) { 
-      setError("레시피 생성 실패. 다시 시도해 주세요."); 
-    } finally { 
-      setLoading(false); 
-    }
+      if (db && user) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'recipes'), { ...data, createdAt: serverTimestamp(), userId: user.uid });
+    } catch (err) { setError("레시피 생성 실패"); } finally { setLoading(false); }
   };
 
   const renderCell = (items, isLunch = false) => (
@@ -222,19 +186,20 @@ const App = () => {
   );
 
   if (authLoading) return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4">
+    <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-4">
       <Loader2 className="animate-spin text-blue-600" size={48} />
-      <p className="font-black text-slate-400 text-xs uppercase tracking-widest text-center animate-pulse">지현이의 영양 매니저<br/>시스템 접속 중...</p>
+      <p className="font-black text-slate-400 text-xs tracking-widest">시스템 접속 중...</p>
     </div>
   );
 
   return (
     <div className="min-h-screen bg-slate-50 p-2 md:p-6 text-slate-900 print:bg-white print:p-0">
+      {/* 네비게이션 */}
       <nav className="max-w-[1100px] mx-auto mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-[2.5rem] shadow-xl border border-white print:hidden">
         <div className="flex items-center gap-4">
-          <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200"><Heart className="text-white w-6 h-6 fill-current" /></div>
+          <div className="bg-blue-600 p-3 rounded-2xl shadow-lg"><Heart className="text-white w-6 h-6 fill-current" /></div>
           <div>
-            <h1 className="text-xl font-black text-slate-800 tracking-tight leading-none italic">지현이의 <span className="text-blue-600 font-black">영양 매니저</span></h1>
+            <h1 className="text-xl font-black text-slate-800 italic">지현이의 <span className="text-blue-600 font-black">영양 매니저</span></h1>
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1.5">Premium Hospital Meal System</p>
           </div>
         </div>
@@ -253,20 +218,25 @@ const App = () => {
       </nav>
 
       <main className="max-w-[1100px] mx-auto">
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3">
-            <AlertCircle size={18} className="shrink-0"/> {error}
+        {!db && activeTab === 'settings' && (
+          <div className="mb-6 p-6 bg-red-50 text-red-600 rounded-3xl border-2 border-red-100 space-y-3">
+            <h4 className="font-black flex items-center gap-2 text-sm"><AlertCircle size={18}/> Firebase 연결이 필요합니다!</h4>
+            <p className="text-xs font-bold leading-relaxed">
+              Vercel 대시보드에서 <strong>VITE_FIREBASE_CONFIG</strong> 환경 변수를 등록한 뒤 다시 배포(Redeploy)해 주세요.
+            </p>
           </div>
         )}
+
+        {error && <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3"><AlertCircle size={18}/> {error}</div>}
 
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in duration-700">
             <div className="flex justify-between items-end px-4 print:hidden">
               <div><h2 className="text-2xl font-black text-slate-800 tracking-tighter">신도시이진병원 식단표</h2><p className="text-slate-400 text-[10px] font-black mt-1.5 uppercase italic">Weekly Patient Meal Plan</p></div>
               <div className="flex gap-3">
-                <button onClick={() => window.print()} className="bg-slate-800 text-white px-6 py-3 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2 transition-all hover:scale-105 active:scale-95"><Printer size={16}/> 인쇄/PDF</button>
-                <button onClick={generateWeeklyPlan} disabled={loading} className="bg-blue-600 text-white px-6 py-3 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2 transition-all hover:scale-105 active:scale-95 disabled:opacity-50">
-                  {loading ? <Loader2 className="animate-spin" size={16}/> : <RefreshCw size={16}/>} 식단 자동 생성
+                <button onClick={() => window.print()} className="bg-slate-800 text-white px-6 py-3 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2"><Printer size={16}/> 인쇄</button>
+                <button onClick={generateWeeklyPlan} disabled={loading} className="bg-blue-600 text-white px-6 py-3 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2 disabled:opacity-50">
+                  {loading ? <Loader2 className="animate-spin" size={16}/> : <RefreshCw size={16}/>} 식단 생성
                 </button>
               </div>
             </div>
@@ -279,34 +249,34 @@ const App = () => {
                   </tr></thead>
                   <tbody className="divide-y-2 divide-slate-200">
                     <tr><td className="bg-slate-50 border-r-2 border-slate-200 font-black text-[11px] text-slate-400">아침</td>{weeklyPlan.map((day, i) => <td key={i} className="border-r-2 border-slate-200 last:border-r-0 align-top">{renderCell(day.breakfast)}</td>)}</tr>
-                    <tr className="bg-blue-50/20 font-bold text-[12px] text-blue-800 tracking-widest text-center"><td className="border-r-2 border-slate-200 text-[10px] text-blue-400 italic">粥</td><td colSpan="7" className="p-2.5">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
+                    <tr className="bg-blue-50/20 font-bold text-[12px] text-blue-800 tracking-widest text-center"><td colSpan="8" className="p-2.5">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
                     <tr><td className="bg-slate-50 border-r-2 border-slate-200 font-black text-[11px] text-slate-400">점심</td>{weeklyPlan.map((day, i) => <td key={i} className="border-r-2 border-slate-200 last:border-r-0 align-top">{renderCell(day.lunch, true)}</td>)}</tr>
-                    <tr className="bg-blue-50/20 font-bold text-[12px] text-blue-800 tracking-widest text-center"><td className="border-r-2 border-slate-200 text-[10px] text-blue-400 italic">粥</td><td colSpan="7" className="p-2.5">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
+                    <tr className="bg-blue-50/20 font-bold text-[12px] text-blue-800 tracking-widest text-center"><td colSpan="8" className="p-2.5">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
                     <tr><td className="bg-slate-50 border-r-2 border-slate-200 font-black text-[11px] text-slate-400">저녁</td>{weeklyPlan.map((day, i) => <td key={i} className="border-r-2 border-slate-200 last:border-r-0 align-top">{renderCell(day.dinner)}</td>)}</tr>
-                    <tr className="bg-rose-50/30 font-black text-[12px] text-rose-600 italic text-center"><td className="border-r-2 border-slate-200 text-[10px] text-rose-400 uppercase">간식</td>{weeklyPlan.map((day, i) => <td key={i} className="p-4 border-r-2 border-slate-200 last:border-r-0">{day.snack || "과일쥬스"}</td>)}</tr>
+                    <tr className="bg-rose-50/30 font-black text-[12px] text-rose-600 italic text-center"><td className="bg-slate-50 border-r-2 border-slate-200 font-black text-[10px] text-rose-400 uppercase">간식</td>{weeklyPlan.map((day, i) => <td key={i} className="p-4 border-r-2 border-slate-200 last:border-r-0">{day.snack || "과일쥬스"}</td>)}</tr>
                   </tbody>
                 </table>
               </div>
-            ) : <div className="bg-white p-24 rounded-[3.5rem] border-[4px] border-dashed border-slate-200 text-center space-y-4 shadow-inner"><ChefHat size={64} className="mx-auto text-slate-200"/><p className="font-black text-slate-300 uppercase tracking-widest">SYSTEM ACCESS READY</p></div>}
+            ) : <div className="bg-white p-24 rounded-[3.5rem] border-[4px] border-dashed border-slate-200 text-center space-y-4 shadow-inner"><ChefHat size={64} className="mx-auto text-slate-100"/><p className="font-black text-slate-300 uppercase tracking-widest">SYSTEM ACCESS READY</p></div>}
           </div>
         )}
 
         {activeTab === 'history' && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 animate-in slide-in-from-right-4">
             {historyList.map((h, i) => (
-              <div key={h.id} className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100 hover:border-blue-400 transition-all group overflow-hidden relative">
+              <div key={h.id} className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100 group relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-2 h-full bg-blue-600 opacity-0 group-hover:opacity-100 transition-all" />
                 <div className="flex justify-between items-start mb-6">
-                  <span className="text-[10px] font-black text-blue-500 bg-blue-50 px-4 py-1.5 rounded-full">Record #{historyList.length - i}</span>
+                  <span className="text-[10px] font-black text-blue-500 bg-blue-50 px-4 py-1.5 rounded-full uppercase">Record #{historyList.length - i}</span>
                   <span className="text-[10px] text-slate-300 font-bold">{h.createdAt ? new Date(h.createdAt.seconds * 1000).toLocaleDateString() : 'Saving...'}</span>
                 </div>
                 <div className="space-y-3 mb-8 text-xs font-bold text-slate-700">
-                  <div className="flex justify-between border-b border-slate-50 pb-2"><span>대표 점심</span><span className="text-blue-600">{h.plan[0]?.lunch[0]}</span></div>
+                  <div className="flex justify-between border-b border-slate-50 pb-2"><span>월 점심</span><span className="text-blue-600 truncate max-w-[100px] text-right">{h.plan[0]?.lunch[0]}</span></div>
                 </div>
                 <button onClick={() => { setWeeklyPlan(h.plan); setActiveTab('planner'); }} className="w-full py-4 bg-slate-50 group-hover:bg-blue-600 group-hover:text-white text-slate-500 rounded-2xl text-xs font-black transition-all">불러오기</button>
               </div>
             ))}
-            {historyList.length === 0 && <div className="col-span-full py-32 text-center text-slate-300 font-black italic text-2xl opacity-50">저장된 데이터가 없습니다.</div>}
+            {historyList.length === 0 && <div className="col-span-full py-32 text-center text-slate-300 font-black italic text-2xl opacity-50 italic uppercase tracking-widest">No History Found</div>}
           </div>
         )}
 
@@ -318,35 +288,21 @@ const App = () => {
                 <div><h3 className="text-2xl font-black text-slate-800 tracking-tighter">AI 레시피 도우미</h3><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">AI Powered Cooking Assistant</p></div>
               </div>
               <div className="flex gap-4">
-                <input type="text" value={recipeQuery} onChange={(e) => setRecipeQuery(e.target.value)} placeholder="레시피가 궁금한 메뉴를 입력하세요 (예: 소불고기)" className="flex-1 px-8 py-4 rounded-2xl bg-slate-50 border-none focus:ring-2 focus:ring-orange-500 font-bold shadow-inner outline-none text-sm" onKeyPress={(e) => e.key === 'Enter' && generateRecipe(recipeQuery)} />
-                <button onClick={() => generateRecipe(recipeQuery)} disabled={loading || !recipeQuery} className="bg-orange-500 hover:bg-orange-600 text-white px-8 py-4 rounded-2xl font-black text-sm shadow-lg transition-all flex items-center gap-2">
+                <input type="text" value={recipeQuery} onChange={(e) => setRecipeQuery(e.target.value)} placeholder="메뉴 입력 (예: 소불고기)" className="flex-1 px-8 py-4 rounded-2xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm" onKeyPress={(e) => e.key === 'Enter' && generateRecipe(recipeQuery)} />
+                <button onClick={() => generateRecipe(recipeQuery)} disabled={loading || !recipeQuery} className="bg-orange-500 text-white px-8 py-4 rounded-2xl font-black text-sm shadow-lg flex items-center gap-2">
                   {loading ? <Loader2 className="animate-spin" size={18}/> : <Search size={18}/>} 검색
                 </button>
               </div>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              {currentRecipe && (
-                <div className="bg-white p-10 rounded-[3rem] shadow-2xl border-4 border-orange-50 animate-in zoom-in-95">
-                  <h4 className="text-3xl font-black text-slate-800 mb-6 flex items-center gap-3 tracking-tighter"><BookOpen className="text-orange-500"/> {currentRecipe.title}</h4>
-                  <div className="space-y-8">
-                    <div><h5 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4 px-1">필수 재료</h5><div className="flex flex-wrap gap-2">{currentRecipe.ingredients.map((ing, i) => <span key={i} className="bg-orange-50 text-orange-700 px-4 py-2 rounded-xl text-xs font-bold border border-orange-100">{ing}</span>)}</div></div>
-                    <div><h5 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4 px-1">조리 순서</h5><div className="space-y-4">{currentRecipe.steps.map((step, i) => <div key={i} className="flex gap-4 items-start"><span className="bg-slate-800 text-white w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black shrink-0">{i+1}</span><p className="text-sm font-medium text-slate-700 leading-relaxed">{step}</p></div>)}</div></div>
-                  </div>
-                </div>
-              )}
-              <div className="space-y-4">
-                <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-6">최근 저장된 레시피</h5>
-                <div className="space-y-3">
-                  {recipeList.map((r) => (
-                    <div key={r.id} onClick={() => { setCurrentRecipe(r); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 hover:border-orange-500 transition-all cursor-pointer flex justify-between items-center group">
-                      <div className="flex items-center gap-4"><div className="bg-slate-50 p-2.5 rounded-xl group-hover:bg-orange-50 transition-colors"><ChefHat size={20} className="text-slate-400 group-hover:text-orange-500"/></div><span className="font-black text-slate-700 text-sm tracking-tight">{r.title}</span></div>
-                      <span className="text-[10px] text-slate-300 font-bold">{r.createdAt ? new Date(r.createdAt.seconds * 1000).toLocaleDateString() : '...'}</span>
-                    </div>
-                  ))}
+            {currentRecipe && (
+              <div className="bg-white p-10 rounded-[3rem] shadow-2xl border-4 border-orange-50 animate-in zoom-in-95 max-w-2xl mx-auto">
+                <h4 className="text-3xl font-black text-slate-800 mb-6 flex items-center gap-3 tracking-tighter"><BookOpen className="text-orange-500"/> {currentRecipe.title}</h4>
+                <div className="space-y-8">
+                  <div><h5 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4">필수 재료</h5><div className="flex flex-wrap gap-2">{currentRecipe.ingredients.map((ing, i) => <span key={i} className="bg-orange-50 text-orange-700 px-4 py-2 rounded-xl text-xs font-bold">{ing}</span>)}</div></div>
+                  <div><h5 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4">조리 순서</h5><div className="space-y-4">{currentRecipe.steps.map((step, i) => <div key={i} className="flex gap-4 items-start"><span className="bg-slate-800 text-white w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black shrink-0">{i+1}</span><p className="text-sm font-medium text-slate-700">{step}</p></div>)}</div></div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -357,49 +313,27 @@ const App = () => {
                 <div className="absolute inset-0 bg-blue-600/95 flex flex-col items-center justify-center text-white z-20 animate-in fade-in duration-300 text-center px-6">
                   <CheckCircle2 size={64} className="mb-4 animate-bounce" />
                   <p className="text-2xl font-black">설정 저장 완료!</p>
-                  <p className="text-sm opacity-80 mt-2 font-bold">식단표 화면으로 이동합니다.</p>
                 </div>
               )}
-              
-              <div className="flex items-center gap-4 mb-8"><div className="bg-blue-600 p-4 rounded-2xl shadow-lg shadow-blue-100"><Key className="text-white" size={24}/></div><div><h3 className="text-2xl font-black text-slate-800 tracking-tighter">서비스 설정</h3><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Configuration</p></div></div>
+              <div className="flex items-center gap-4 mb-10"><div className="bg-blue-600 p-4 rounded-2xl shadow-lg"><Key className="text-white" size={24}/></div><h3 className="text-2xl font-black text-slate-800 tracking-tighter">서비스 설정</h3></div>
               
               <div className="mb-8 p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
-                <span className="text-[11px] font-black text-slate-500 uppercase tracking-widest">데이터베이스 연결 상태</span>
+                <span className="text-[11px] font-black text-slate-500 uppercase">연결 상태</span>
                 {db ? (
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 animate-pulse">
-                    <Database size={12}/> Connected
-                  </span>
+                  <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100"><Database size={12}/> Connected</span>
                 ) : (
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-50 px-3 py-1 rounded-full border border-red-100">
-                    <WifiOff size={12}/> Disconnected
-                  </span>
+                  <span className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-50 px-3 py-1 rounded-full border border-red-100"><WifiOff size={12}/> Disconnected</span>
                 )}
               </div>
 
-              <div className="space-y-8 relative">
+              <div className="space-y-8">
                 <div>
-                  <label className="block text-[11px] font-black text-slate-400 mb-3 uppercase tracking-widest px-1 flex justify-between items-center">
-                    Gemini API Key <Info size={14} className="opacity-50"/>
-                  </label>
-                  <input type="password" value={userSettings.geminiKey} onChange={(e) => setUserSettings({...userSettings, geminiKey: e.target.value})} placeholder="API 키를 입력하세요" className="w-full px-8 py-5 rounded-3xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm transition-all focus:ring-2 focus:ring-blue-500" />
+                  <label className="block text-[11px] font-black text-slate-400 mb-3 uppercase px-1">Gemini API Key</label>
+                  <input type="password" value={userSettings.geminiKey} onChange={(e) => setUserSettings({...userSettings, geminiKey: e.target.value})} placeholder="API 키를 입력하세요" className="w-full px-8 py-5 rounded-3xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm focus:ring-2 focus:ring-blue-500" />
                 </div>
-                
-                <button onClick={handleSaveSettings} disabled={loading} className={`w-full py-5 text-white rounded-3xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 ${db ? 'bg-slate-900 hover:bg-black' : 'bg-red-500 hover:bg-red-600'}`}>
-                  {loading ? <Loader2 className="animate-spin" size={18}/> : db ? <Save size={18}/> : <AlertCircle size={18}/>} 
-                  {db ? "설정 저장하기" : "연결 필요"}
+                <button onClick={handleSaveSettings} disabled={loading} className="w-full py-5 bg-slate-900 text-white rounded-3xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2">
+                  {loading ? <Loader2 className="animate-spin" size={18}/> : <Save size={18}/>} 설정 저장하기
                 </button>
-
-                {!db && (
-                  <div className="p-6 bg-red-50 rounded-3xl border-2 border-red-100 space-y-4 animate-in slide-in-from-top-2">
-                    <h4 className="font-black text-red-600 flex items-center gap-2 text-sm"><Info size={16}/> Vercel 설정 가이드</h4>
-                    <ol className="text-[10px] text-slate-500 space-y-2 list-decimal px-4 font-medium">
-                      <li>Vercel 대시보드 {'→'} <span className="font-bold">Settings</span></li>
-                      <li><span className="font-bold text-blue-600">Environment Variables</span></li>
-                      <li><span className="font-bold">Key</span>: <code className="bg-slate-200 px-1 rounded">VITE_FIREBASE_CONFIG</code></li>
-                      <li><span className="font-bold text-blue-600">Add</span> 클릭 후 반드시 다시 배포하세요!</li>
-                    </ol>
-                  </div>
-                )}
               </div>
             </div>
           </div>
