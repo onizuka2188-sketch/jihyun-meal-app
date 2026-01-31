@@ -5,8 +5,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>사랑하는 지현이의 영양 매니저</title>
-<!-- 디자인 엔진 주소 (정상 주소로 수정 완료) -->
+<!-- 1. 디자인 엔진(Tailwind) 진짜 주소 -->
 <script src="https://www.google.com/search?q=https://cdn.tailwindcss.com"></script>
+<!-- 2. 폰트(Noto Sans KR) 진짜 주소 -->
 <style>
 @import url('https://www.google.com/search?q=https://fonts.googleapis.com/css2%3Ffamily%3DNoto%2BSans%2BKR:wght%40400%3B700%3B900%26display%3Dswap');
 body {
@@ -22,4 +23,3 @@ padding: 0;
 <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>
-
