@@ -30,7 +30,7 @@ try {
   }
 } catch (e) { }
 
-const appId = getEnv('APP_ID') || 'jihyun-meal-final';
+const appId = getEnv('APP_ID') || 'jihyun-meal-final-fix';
 
 let app, auth, db;
 if (firebaseConfig && firebaseConfig.apiKey) {
@@ -65,7 +65,7 @@ const App = () => {
 
   const [userSettings, setUserSettings] = useState({ 
     geminiKey: "",
-    learningData: "여기에 예전 식단표 정보가 누적됩니다. 사진을 분석하면 자동으로 내용이 추가됩니다." 
+    learningData: "이전 식단표 사진을 분석하면 여기에 텍스트가 쌓입니다." 
   });
 
   useEffect(() => {
@@ -102,63 +102,40 @@ const App = () => {
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const key = userSettings.geminiKey || getEnv('GEMINI_API_KEY') || "";
-    if (!key) { setError("사진을 분석하려면 Gemini API 키가 필요합니다."); setActiveTab('settings'); return; }
-
-    setVisionLoading(true);
-    setError(null);
-
+    if (!key) { setError("Gemini API 키가 필요합니다."); setActiveTab('settings'); return; }
+    setVisionLoading(true); setError(null);
     try {
       const reader = new FileReader();
       reader.readAsDataURL(file);
       reader.onload = async () => {
         const base64Data = reader.result.split(',')[1];
-        
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${key}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: "이 식단표 사진에서 모든 날짜와 메뉴 정보를 텍스트로 추출해줘. 불필요한 설명 없이 메뉴 리스트만 나열해줘." },
-                { inlineData: { mimeType: file.type, data: base64Data } }
-              ]
-            }]
+            contents: [{ parts: [{ text: "이 사진의 메뉴 정보를 텍스트로 추출해줘." }, { inlineData: { mimeType: file.type, data: base64Data } }] }]
           })
         });
-
         const result = await res.json();
         const extractedText = result.candidates[0].content.parts[0].text;
-        
-        setUserSettings(prev => ({
-          ...prev,
-          learningData: prev.learningData + "\n\n[추가된 식단 정보]:\n" + extractedText
-        }));
+        setUserSettings(prev => ({ ...prev, learningData: prev.learningData + "\n" + extractedText }));
         setVisionLoading(false);
         setSaveStatus('learning_success');
         setTimeout(() => setSaveStatus(null), 2000);
       };
-    } catch (err) {
-      setError("사진 분석 중 오류가 발생했습니다.");
-      setVisionLoading(false);
-    }
+    } catch (err) { setError("사진 분석 실패"); setVisionLoading(false); }
   };
 
   const generateWeeklyPlan = async () => {
     const key = userSettings.geminiKey || getEnv('GEMINI_API_KEY') || "";
-    if (!key) { setError("Gemini API 키를 먼저 입력해 주세요."); setActiveTab('settings'); return; }
-    
-    setLoading(true); 
-    setError(null);
+    if (!key) { setError("Gemini API 키를 입력해 주세요."); setActiveTab('settings'); return; }
+    setLoading(true); setError(null);
 
-    const prompt = `당신은 병원 전문 영양사입니다. 
-    아래의 [참고 식단 데이터]의 패턴과 메뉴 스타일을 반영하여 '신도시이진병원' 스타일의 새로운 7일치 주간 식단표를 생성하세요.
-    
-    [참고 식단 데이터]:
-    ${userSettings.learningData}
-    
-    반드시 JSON { "days": [] } 형식으로만 답변하세요.`;
+    const prompt = `당신은 전문 영양사입니다. 다음 데이터를 참고하여 7일치 주간 식단표를 만드세요.
+    참고 데이터: ${userSettings.learningData}
+    반드시 다음 JSON 형식을 한 자도 틀리지 말고 지키세요:
+    { "days": [ { "date": "1/1(월)", "breakfast": ["메뉴1", "메뉴2", "메뉴3", "메뉴4", "메뉴5"], "lunch": [...], "dinner": [...], "snack": "간식메뉴" } ] }`;
 
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${key}`, {
@@ -166,16 +143,17 @@ const App = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
+          systemInstruction: { parts: [{ text: "오직 지정된 JSON 형식으로만 응답하세요. breakfast, lunch, dinner는 반드시 5개의 문자열 배열이어야 합니다." }] },
           generationConfig: { responseMimeType: "application/json" }
         })
       });
       const result = await res.json();
       const data = JSON.parse(result.candidates[0].content.parts[0].text);
-      setWeeklyPlan(data.days);
-      if (db && user) {
-        addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'meal_history'), { plan: data.days, createdAt: serverTimestamp(), userId: user.uid }).catch(() => {});
-      }
-    } catch (err) { setError("식단 생성 실패."); } finally { setLoading(false); }
+      if (data.days) {
+        setWeeklyPlan(data.days);
+        if (db && user) addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'meal_history'), { plan: data.days, createdAt: serverTimestamp(), userId: user.uid }).catch(() => {});
+      } else { throw new Error(); }
+    } catch (err) { setError("식단 생성 중 데이터 오류가 발생했습니다. 다시 시도해 주세요."); } finally { setLoading(false); }
   };
 
   const generateRecipe = async (q) => {
@@ -187,22 +165,20 @@ const App = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `${q}의 상세 레시피를 병원 환자식 기준으로 알려줘.` }] }],
-          systemInstruction: { parts: [{ text: "JSON {title, ingredients: [], steps: []} 형식으로만 답변하세요." }] },
+          contents: [{ parts: [{ text: `${q}의 상세 레시피를 알려줘.` }] }],
+          systemInstruction: { parts: [{ text: "JSON {title, ingredients: [], steps: []} 형식으로 답변하세요." }] },
           generationConfig: { responseMimeType: "application/json" }
         })
       });
       const result = await res.json();
       const data = JSON.parse(result.candidates[0].content.parts[0].text);
       setCurrentRecipe(data);
-      if (db && user) {
-        addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'recipes'), { ...data, createdAt: serverTimestamp(), userId: user.uid }).catch(() => {});
-      }
+      if (db && user) addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'recipes'), { ...data, createdAt: serverTimestamp(), userId: user.uid }).catch(() => {});
     } catch (err) { setError("레시피 생성 실패"); } finally { setLoading(false); }
   };
 
   const renderCell = (items, isLunch = false) => {
-    const list = Array.isArray(items) ? items : [];
+    const list = Array.isArray(items) ? items : ["메뉴 정보 없음"];
     return (
       <div className="flex flex-col items-center justify-center py-2 min-h-[110px] leading-tight">
         {list.map((item, i) => (
@@ -222,12 +198,7 @@ const App = () => {
           <div><h1 className="text-xl font-black text-slate-800 tracking-tighter italic">지현이의 <span className="text-blue-600">영양 매니저</span></h1></div>
         </div>
         <div className="flex bg-slate-100 p-1.5 rounded-2xl gap-1">
-          {[
-            { id: 'planner', label: '식단표', icon: <Calendar size={14}/> },
-            { id: 'history', label: '히스토리', icon: <History size={14}/> },
-            { id: 'recipes', label: '레시피', icon: <ChefHat size={14}/> },
-            { id: 'settings', label: '설정', icon: <Settings size={14}/> }
-          ].map(t => (
+          {[{id:'planner',label:'식단표',icon:<Calendar size={14}/>},{id:'history',label:'히스토리',icon:<History size={14}/>},{id:'recipes',label:'레시피',icon:<ChefHat size={14}/>},{id:'settings',label:'설정',icon:<Settings size={14}/>}].map(t => (
             <button key={t.id} onClick={() => { setActiveTab(t.id); setError(null); }} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${activeTab === t.id ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
               <div className="flex items-center gap-2">{t.icon} {t.label}</div>
             </button>
@@ -236,10 +207,7 @@ const App = () => {
       </nav>
 
       <main className="max-w-[1100px] mx-auto">
-        {!db && activeTab === 'planner' && (
-          <div className="mb-6 px-6 py-3 bg-blue-50 text-blue-600 rounded-full text-[10px] font-black flex items-center gap-2 border border-blue-100 print:hidden uppercase tracking-widest"><Info size={14}/> Offline Mode Enabled</div>
-        )}
-
+        {!db && activeTab === 'planner' && <div className="mb-6 px-6 py-3 bg-blue-50 text-blue-600 rounded-full text-[10px] font-black flex items-center gap-2 border border-blue-100 print:hidden uppercase tracking-widest"><Info size={14}/> Offline Mode Enabled</div>}
         {error && <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3"><AlertCircle size={18}/> {error}</div>}
 
         {activeTab === 'planner' && (
@@ -258,8 +226,8 @@ const App = () => {
               <div className="bg-white border-[3px] border-slate-300 shadow-2xl overflow-x-auto rounded-xl">
                 <table className="w-full min-w-[900px] border-collapse text-center table-fixed">
                   <thead><tr className="bg-slate-50 border-b-[3px] border-slate-300">
-                    <th className="w-24 p-4 border-r-2 border-slate-200 text-[10px] font-black text-slate-400 uppercase">구분</th>
-                    {weeklyPlan.map((day, i) => <th key={i} className={`p-4 border-r-2 border-slate-200 text-[14px] font-black ${i === 5 ? 'text-blue-600' : i === 6 ? 'text-red-600' : 'text-slate-800'}`}>{day.date}</th>)}
+                    <th className="w-24 p-4 border-r-2 border-slate-200 text-[10px] font-black text-slate-400">구분</th>
+                    {weeklyPlan.map((day, i) => <th key={i} className={`p-4 border-r-2 border-slate-200 text-[14px] font-black ${i === 5 ? 'text-blue-600' : i === 6 ? 'text-red-600' : 'text-slate-800'}`}>{day.date || "날짜정보"}</th>)}
                   </tr></thead>
                   <tbody className="divide-y-2 divide-slate-200">
                     <tr><td className="bg-slate-50 font-black text-[11px] text-slate-400 text-center">아침</td>{weeklyPlan.map((day, i) => <td key={i} className="border-r-2 border-slate-200 align-top">{renderCell(day.breakfast)}</td>)}</tr>
@@ -271,15 +239,14 @@ const App = () => {
                   </tbody>
                 </table>
               </div>
-            ) : <div className="bg-white p-24 rounded-[3.5rem] border-[4px] border-dashed border-slate-200 text-center space-y-4 shadow-inner"><ChefHat size={64} className="mx-auto text-slate-100"/><p className="font-black text-slate-300 uppercase tracking-widest">System Ready</p></div>}
+            ) : <div className="bg-white p-24 rounded-[3.5rem] border-[4px] border-dashed border-slate-200 text-center space-y-4 shadow-inner"><ChefHat size={64} className="mx-auto text-slate-100"/><p className="font-black text-slate-300 uppercase tracking-widest">데이터를 생성해 주세요</p></div>}
           </div>
         )}
 
         {activeTab === 'history' && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 animate-in slide-in-from-right-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {historyList.map((h, i) => (
               <div key={h.id} className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100 hover:border-blue-400 transition-all group overflow-hidden relative">
-                <div className="absolute top-0 left-0 w-2 h-full bg-blue-600 opacity-0 group-hover:opacity-100 transition-all" />
                 <div className="flex justify-between items-start mb-6">
                   <span className="text-[10px] font-black text-blue-500 bg-blue-50 px-4 py-1.5 rounded-full uppercase">Record #{historyList.length - i}</span>
                   <span className="text-[10px] text-slate-300 font-bold">{h.createdAt ? new Date(h.createdAt.seconds * 1000).toLocaleDateString() : '...'}</span>
@@ -287,21 +254,20 @@ const App = () => {
                 <button onClick={() => { setWeeklyPlan(h.plan); setActiveTab('planner'); }} className="w-full py-4 bg-slate-50 group-hover:bg-blue-600 group-hover:text-white text-slate-500 rounded-2xl text-xs font-black transition-all">불러오기</button>
               </div>
             ))}
-            {historyList.length === 0 && <div className="col-span-full py-32 text-center text-slate-300 font-black italic text-2xl opacity-50 uppercase tracking-widest">No History Found</div>}
+            {historyList.length === 0 && <div className="col-span-full py-32 text-center text-slate-300 font-black italic">No History Found</div>}
           </div>
         )}
 
-        {/* --- 레시피 탭 부활 --- */}
         {activeTab === 'recipes' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
             <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100">
               <div className="flex items-center gap-4 mb-8">
                 <div className="bg-orange-500 p-3 rounded-2xl shadow-lg"><Utensils className="text-white" size={24}/></div>
-                <div><h3 className="text-2xl font-black text-slate-800 tracking-tighter italic">AI 레시피 도우미</h3><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">AI Powered Cooking Assistant</p></div>
+                <div><h3 className="text-2xl font-black text-slate-800 tracking-tighter italic">AI 레시피 도우미</h3></div>
               </div>
               <div className="flex gap-4">
-                <input type="text" value={recipeQuery} onChange={(e) => setRecipeQuery(e.target.value)} placeholder="메뉴를 입력하세요 (예: 소불고기)" className="flex-1 px-8 py-4 rounded-2xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm focus:ring-2 focus:ring-orange-500" onKeyPress={(e) => e.key === 'Enter' && generateRecipe(recipeQuery)} />
-                <button onClick={() => generateRecipe(recipeQuery)} disabled={loading || !recipeQuery} className="bg-orange-500 text-white px-8 py-4 rounded-2xl font-black text-sm shadow-lg transition-all hover:scale-105 active:scale-95">
+                <input type="text" value={recipeQuery} onChange={(e) => setRecipeQuery(e.target.value)} placeholder="메뉴를 입력하세요" className="flex-1 px-8 py-4 rounded-2xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm" onKeyPress={(e) => e.key === 'Enter' && generateRecipe(recipeQuery)} />
+                <button onClick={() => generateRecipe(recipeQuery)} disabled={loading || !recipeQuery} className="bg-orange-500 text-white px-8 py-4 rounded-2xl font-black text-sm shadow-lg transition-all hover:scale-105">
                   {loading ? <Loader2 className="animate-spin" size={18}/> : <Search size={18}/>} 검색
                 </button>
               </div>
@@ -311,7 +277,7 @@ const App = () => {
                 <div className="bg-white p-10 rounded-[3rem] shadow-2xl border-4 border-orange-50 animate-in zoom-in-95">
                   <h4 className="text-3xl font-black text-slate-800 mb-6 flex items-center gap-3 tracking-tighter"><BookOpen className="text-orange-500"/> {currentRecipe.title}</h4>
                   <div className="space-y-8">
-                    <div><h5 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4">필수 재료</h5><div className="flex flex-wrap gap-2">{currentRecipe.ingredients.map((ing, i) => <span key={i} className="bg-orange-50 text-orange-700 px-4 py-2 rounded-xl text-xs font-bold border border-orange-100">{ing}</span>)}</div></div>
+                    <div><h5 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4">필수 재료</h5><div className="flex flex-wrap gap-2">{currentRecipe.ingredients.map((ing, i) => <span key={i} className="bg-orange-50 text-orange-700 px-4 py-2 rounded-xl text-xs font-bold">{ing}</span>)}</div></div>
                     <div><h5 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4">조리 순서</h5><div className="space-y-4">{currentRecipe.steps.map((step, i) => <div key={i} className="flex gap-4 items-start"><span className="bg-slate-800 text-white w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black shrink-0">{i+1}</span><p className="text-sm font-medium text-slate-700 leading-relaxed">{step}</p></div>)}</div></div>
                   </div>
                 </div>
@@ -321,11 +287,9 @@ const App = () => {
                 <div className="grid grid-cols-1 gap-3">
                   {recipeList.map(r => (
                     <div key={r.id} onClick={() => {setCurrentRecipe(r); window.scrollTo({top: 0, behavior: 'smooth'});}} className="bg-white p-6 rounded-3xl border border-slate-100 hover:border-orange-400 transition-all cursor-pointer flex justify-between items-center group shadow-sm">
-                      <div className="flex items-center gap-4"><div className="bg-slate-50 p-2 rounded-xl group-hover:bg-orange-50 transition-colors"><ChefHat size={18} className="text-slate-400 group-hover:text-orange-500"/></div><span className="font-black text-slate-700 text-sm">{r.title}</span></div>
-                      <span className="text-[10px] text-slate-300 font-bold">{r.createdAt ? new Date(r.createdAt.seconds * 1000).toLocaleDateString() : '...'}</span>
+                      <div className="flex items-center gap-4"><ChefHat size={18} className="text-slate-400 group-hover:text-orange-500"/><span className="font-black text-slate-700 text-sm">{r.title}</span></div>
                     </div>
                   ))}
-                  {recipeList.length === 0 && <p className="text-center py-10 text-slate-300 text-xs font-bold uppercase italic">No Recipes Saved</p>}
                 </div>
               </div>
             </div>
@@ -335,52 +299,32 @@ const App = () => {
         {activeTab === 'settings' && (
           <div className="max-w-2xl mx-auto py-12 animate-in zoom-in">
             <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-slate-100 relative overflow-hidden">
-              {saveStatus === 'learning_success' && <div className="absolute inset-0 bg-blue-600 flex flex-col items-center justify-center text-white z-20 font-black text-2xl animate-in fade-in duration-300 px-8 text-center"><CheckCircle2 size={48} className="mb-4 animate-bounce"/>사진 분석 및 학습 완료!</div>}
-              {saveStatus === 'success' && <div className="absolute inset-0 bg-blue-600 flex items-center justify-center text-white z-20 font-black text-2xl animate-in fade-in duration-300">설정 저장 완료!</div>}
-              
-              <div className="flex items-center gap-4 mb-8"><div className="bg-blue-600 p-4 rounded-2xl shadow-lg"><BrainCircuit className="text-white" size={24}/></div><h3 className="text-2xl font-black text-slate-800 italic tracking-tighter">AI 지능 학습 및 설정</h3></div>
-              
+              {saveStatus === 'learning_success' && <div className="absolute inset-0 bg-blue-600 flex flex-col items-center justify-center text-white z-20 font-black text-2xl animate-in fade-in duration-300">학습 완료!</div>}
+              {saveStatus === 'success' && <div className="absolute inset-0 bg-blue-600 flex items-center justify-center text-white z-20 font-black text-2xl animate-in fade-in duration-300">저장 완료!</div>}
+              <div className="flex items-center gap-4 mb-8"><div className="bg-blue-600 p-4 rounded-2xl shadow-lg"><BrainCircuit className="text-white" size={24}/></div><h3 className="text-2xl font-black text-slate-800 italic">시스템 설정 및 학습</h3></div>
               <div className="space-y-10">
                 <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-100 shadow-inner">
                   <label className="block text-[11px] font-black text-slate-400 mb-3 uppercase px-1">Gemini API Key</label>
                   <input type="password" value={userSettings.geminiKey} onChange={(e) => setUserSettings({...userSettings, geminiKey: e.target.value})} placeholder="API 키를 입력하세요" className="w-full px-8 py-5 rounded-3xl bg-white border-none font-bold shadow-sm outline-none text-sm focus:ring-2 focus:ring-blue-500" />
                 </div>
-
-                <div className="p-8 bg-blue-50/50 rounded-[2.5rem] border-2 border-dashed border-blue-200 shadow-sm">
-                  <div className="flex justify-between items-center mb-6">
-                    <div><h4 className="font-black text-blue-700 text-lg tracking-tighter italic">식단표 사진으로 학습하기</h4><p className="text-[10px] text-blue-400 font-bold mt-1 uppercase tracking-widest">AI Visual Learning</p></div>
-                    <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-100"><Camera className="text-white" size={20}/></div>
-                  </div>
+                <div className="p-8 bg-blue-50/50 rounded-[2.5rem] border-2 border-dashed border-blue-200">
+                  <h4 className="font-black text-blue-700 text-lg tracking-tighter mb-4 italic">식단표 사진으로 학습하기</h4>
                   <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleImageUpload} />
-                  <button onClick={() => fileInputRef.current.click()} disabled={visionLoading} className="w-full py-10 bg-white border-2 border-dashed border-blue-100 rounded-[2rem] flex flex-col items-center justify-center gap-4 hover:bg-blue-50 transition-all group">
-                    {visionLoading ? (
-                      <div className="flex flex-col items-center gap-3">
-                        <Loader2 className="animate-spin text-blue-600" size={32} />
-                        <p className="text-xs font-black text-blue-600 animate-pulse uppercase tracking-tighter">AI가 분석 중입니다...</p>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="bg-blue-100 p-4 rounded-full group-hover:scale-110 transition-transform"><Upload className="text-blue-600" size={24}/></div>
-                        <p className="text-sm font-black text-slate-500 tracking-tight">이곳을 클릭하여 <span className="text-blue-600">식단표 사진</span>을 선택하세요</p>
-                      </>
-                    )}
+                  <button onClick={() => fileInputRef.current.click()} disabled={visionLoading} className="w-full py-10 bg-white border-2 border-dashed border-blue-200 rounded-[2rem] flex flex-col items-center justify-center gap-4 hover:bg-blue-50 transition-all group">
+                    {visionLoading ? <Loader2 className="animate-spin text-blue-600" size={32} /> : <><Upload className="text-blue-600" size={24}/><p className="text-sm font-black text-slate-500">사진을 선택하세요</p></>}
                   </button>
                 </div>
-
                 <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-100 shadow-inner">
-                  <label className="block text-[11px] font-black text-slate-400 mb-3 uppercase px-1 tracking-widest">누적 학습 데이터 (패턴 분석용)</label>
+                  <label className="block text-[11px] font-black text-slate-400 mb-3 uppercase px-1">누적 학습 데이터</label>
                   <textarea value={userSettings.learningData} onChange={(e) => setUserSettings({...userSettings, learningData: e.target.value})} className="w-full px-8 py-6 rounded-3xl bg-white border-none font-bold shadow-sm outline-none text-xs h-40 resize-none leading-relaxed" />
                 </div>
-
-                <button onClick={() => { if(db && user) { setLoading(true); setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config'), userSettings, { merge: true }).then(() => { setSaveStatus('success'); setTimeout(() => { setSaveStatus(null); setActiveTab('planner'); }, 1500); }).finally(() => setLoading(false)); } else { setSaveStatus('success'); setTimeout(() => { setSaveStatus(null); setActiveTab('planner'); }, 1500); } }} className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl transition-all hover:bg-black active:scale-95 flex items-center justify-center gap-2">
-                  <Save size={18}/> 설정 및 학습 데이터 저장
-                </button>
+                <button onClick={() => { if(db && user) { setLoading(true); setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config'), userSettings, { merge: true }).then(() => { setSaveStatus('success'); setTimeout(() => { setSaveStatus(null); setActiveTab('planner'); }, 1500); }).finally(() => setLoading(false)); } else { setSaveStatus('success'); setTimeout(() => { setSaveStatus(null); setActiveTab('planner'); }, 1500); } }} className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl transition-all hover:bg-black active:scale-95 flex items-center justify-center gap-2"><Save size={18}/> 설정 저장</button>
               </div>
             </div>
           </div>
         )}
       </main>
-      <footer className="mt-20 py-16 text-center opacity-30 text-[10px] font-black border-t border-slate-200 max-w-[1100px] mx-auto print:hidden uppercase tracking-[0.5em] text-slate-400">Jihyun's AI Nutrition Manager</footer>
+      <footer className="mt-20 py-16 text-center opacity-30 text-[10px] font-black border-t border-slate-200 max-w-[1100px] mx-auto print:hidden uppercase tracking-[0.5em]">Jihyun's AI Nutrition Manager</footer>
     </div>
   );
 };
