@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Calendar, ChefHat, RefreshCw, Loader2, Key, Heart, Info, AlertCircle, Printer, History, Settings, Save, Search, BookOpen, Utensils, CheckCircle2 } from 'lucide-react';
+import { Calendar, ChefHat, RefreshCw, Loader2, Key, Heart, Info, AlertCircle, Printer, History, Settings, Save, Search, BookOpen, Utensils, CheckCircle2, Database, WifiOff } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, onSnapshot, addDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
-// --- 환경 변수 로드 (안전한 접근 방식) ---
+// --- 환경 변수 로드 (Vercel 배포 시 필수 설정) ---
 const getEnvVar = (key) => {
   if (typeof window !== 'undefined' && window[key]) return window[key];
   try {
@@ -24,16 +24,20 @@ const initialAuthToken = getEnvVar('__initial_auth_token');
 // Firebase 서비스 초기화
 let app, auth, db;
 if (firebaseConfig) {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (e) {
+    console.error("Firebase 초기화 에러:", e);
+  }
 }
 
 const App = () => {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [saveStatus, setSaveStatus] = useState(null); // 'success', 'error'
+  const [saveStatus, setSaveStatus] = useState(null); 
   const [weeklyPlan, setWeeklyPlan] = useState(null);
   const [historyList, setHistoryList] = useState([]);
   const [recipeList, setRecipeList] = useState([]);
@@ -43,9 +47,13 @@ const App = () => {
   const [recipeQuery, setRecipeQuery] = useState("");
   const [currentRecipe, setCurrentRecipe] = useState(null);
 
-  // 1. 인증 처리 (Vercel 및 로컬 공용)
+  // 1. 인증 처리
   useEffect(() => {
-    if (!auth) { setAuthLoading(false); return; }
+    if (!auth) { 
+      setAuthLoading(false); 
+      setError("Firebase 설정(VITE_FIREBASE_CONFIG)이 Vercel에 등록되지 않았습니다.");
+      return; 
+    }
     const initAuth = async () => {
       try {
         if (initialAuthToken) {
@@ -55,7 +63,7 @@ const App = () => {
         }
       } catch (err) { 
         console.error("인증 실패:", err);
-        setError("시스템 인증에 실패했습니다. Firebase 설정을 확인하세요.");
+        setError("시스템 인증에 실패했습니다.");
       } finally {
         setAuthLoading(false);
       }
@@ -65,25 +73,22 @@ const App = () => {
     return () => unsubscribe();
   }, []);
 
-  // 2. 실시간 데이터 로드 (히스토리, 레시피, 설정)
+  // 2. 실시간 데이터 로드
   useEffect(() => {
     if (!user || !db) return;
 
-    // 히스토리 리스너 (Public)
     const historyRef = collection(db, 'artifacts', appId, 'public', 'data', 'meal_history');
     const unsubHistory = onSnapshot(historyRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setHistoryList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     }, (err) => console.error("히스토리 로드 실패:", err));
 
-    // 레시피 리스너 (Public)
     const recipeRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
     const unsubRecipes = onSnapshot(recipeRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setRecipeList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     }, (err) => console.error("레시피 로드 실패:", err));
 
-    // 설정 리스너 (Private)
     const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -94,14 +99,21 @@ const App = () => {
     return () => { unsubHistory(); unsubRecipes(); unsubSettings(); };
   }, [user]);
 
-  // 3. API 키 관리
   const getApiKey = useCallback(() => {
     return userSettings.geminiKey || getEnvVar('gemini_api_key') || "";
   }, [userSettings.geminiKey]);
 
-  // 4. 설정 저장 함수 (가장 중요한 부분!)
+  // 4. 설정 저장 함수
   const handleSaveSettings = async () => {
-    if (!user || !db) return;
+    if (!db) {
+      setError("Vercel 대시보드에서 VITE_FIREBASE_CONFIG 환경 변수를 설정해야 저장이 가능합니다.");
+      return;
+    }
+    if (!user) {
+      setError("사용자 인증 중입니다. 잠시만 기다려 주세요.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setSaveStatus(null);
@@ -116,7 +128,7 @@ const App = () => {
       }, 1500);
     } catch (err) {
       console.error("저장 에러:", err);
-      setError("API 키 저장에 실패했습니다. 권한 설정을 확인하세요.");
+      setError("데이터베이스 저장에 실패했습니다. Firestore 규칙을 확인하세요.");
       setSaveStatus('error');
     } finally {
       setLoading(false);
@@ -211,13 +223,13 @@ const App = () => {
   if (authLoading) return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4">
       <Loader2 className="animate-spin text-blue-600" size={48} />
-      <p className="font-black text-slate-400 text-xs uppercase tracking-widest">System Accessing...</p>
+      <p className="font-black text-slate-400 text-xs uppercase tracking-widest text-center">지현이의 영양 매니저<br/>시스템 접속 중...</p>
     </div>
   );
 
   return (
     <div className="min-h-screen bg-slate-50 p-2 md:p-6 text-slate-900 print:bg-white print:p-0">
-      {/* --- 상단 네비게이션 (2번 사진 UI) --- */}
+      {/* --- 상단 네비게이션 --- */}
       <nav className="max-w-[1100px] mx-auto mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-[2.5rem] shadow-xl border border-white print:hidden">
         <div className="flex items-center gap-4">
           <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200"><Heart className="text-white w-6 h-6 fill-current" /></div>
@@ -242,7 +254,7 @@ const App = () => {
 
       <main className="max-w-[1100px] mx-auto">
         {error && (
-          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3 animate-bounce">
+          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3 animate-pulse">
             <AlertCircle size={18}/> {error}
           </div>
         )}
@@ -342,22 +354,38 @@ const App = () => {
           </div>
         )}
 
-        {/* --- 설정 탭 (에러 해결 핵심!) --- */}
+        {/* --- 설정 탭 --- */}
         {activeTab === 'settings' && (
           <div className="max-w-xl mx-auto py-12 animate-in zoom-in">
             <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-slate-100 relative overflow-hidden">
               {saveStatus === 'success' && (
-                <div className="absolute inset-0 bg-blue-600/95 flex flex-col items-center justify-center text-white z-20 animate-in fade-in duration-300">
+                <div className="absolute inset-0 bg-blue-600/95 flex flex-col items-center justify-center text-white z-20 animate-in fade-in duration-300 text-center px-6">
                   <CheckCircle2 size={64} className="mb-4 animate-bounce" />
-                  <p className="text-2xl font-black">저장 완료!</p>
-                  <p className="text-sm opacity-80 mt-2 font-bold">식단표 화면으로 이동합니다...</p>
+                  <p className="text-2xl font-black">설정 저장 완료!</p>
+                  <p className="text-sm opacity-80 mt-2 font-bold">식단표 화면으로 이동하여 생성해 보세요.</p>
                 </div>
               )}
               
-              <div className="flex items-center gap-4 mb-10"><div className="bg-blue-600 p-4 rounded-2xl shadow-lg shadow-blue-100"><Key className="text-white" size={24}/></div><div><h3 className="text-2xl font-black text-slate-800 tracking-tighter">서비스 설정</h3><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Configuration</p></div></div>
-              <div className="space-y-8">
+              <div className="flex items-center gap-4 mb-8"><div className="bg-blue-600 p-4 rounded-2xl shadow-lg shadow-blue-100"><Key className="text-white" size={24}/></div><div><h3 className="text-2xl font-black text-slate-800 tracking-tighter">서비스 설정</h3><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Configuration</p></div></div>
+              
+              <div className="mb-8 p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
+                <span className="text-[11px] font-black text-slate-500 uppercase tracking-widest">데이터베이스 연결 상태</span>
+                {db ? (
+                  <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 animate-pulse">
+                    <Database size={12}/> Connected
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-50 px-3 py-1 rounded-full border border-red-100">
+                    <WifiOff size={12}/> Disconnected
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-8 relative">
                 <div>
-                  <label className="block text-[11px] font-black text-slate-400 mb-3 uppercase tracking-widest px-1">Gemini API Key</label>
+                  <label className="block text-[11px] font-black text-slate-400 mb-3 uppercase tracking-widest px-1 flex justify-between items-center">
+                    Gemini API Key <Info size={14} className="opacity-50"/>
+                  </label>
                   <input type="password" value={userSettings.geminiKey} onChange={(e) => setUserSettings({...userSettings, geminiKey: e.target.value})} placeholder="API 키를 입력하세요" className="w-full px-8 py-5 rounded-3xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm transition-all focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <button 
@@ -367,9 +395,10 @@ const App = () => {
                 >
                   {loading ? <Loader2 className="animate-spin" size={18}/> : <Save size={18}/>} 설정 저장하기
                 </button>
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-[10px] text-slate-400 leading-relaxed font-medium">
-                  * API 키는 본인의 계정에 안전하게 암호화되어 저장됩니다.<br/>
-                  * 식단 생성 및 레시피 검색을 위해 반드시 필요합니다.
+                <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 text-[10px] text-blue-600 leading-relaxed font-bold">
+                  ⚠️ Vercel 앱에서 저장이 안 된다면?<br/>
+                  반드시 Vercel 대시보드 {'→'} Settings {'→'} Environment Variables에 <br/>
+                  VITE_FIREBASE_CONFIG와 VITE_GEMINI_API_KEY를 등록해야 합니다.
                 </div>
               </div>
             </div>
