@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Calendar, ChefHat, RefreshCw, Loader2, Key, Heart, Info, AlertCircle, Printer, History, Settings, Save, Search, BookOpen, Utensils, CheckCircle2, Database, WifiOff } from 'lucide-react';
+import { Calendar, ChefHat, RefreshCw, Loader2, Key, Heart, Info, AlertCircle, Printer, History, Settings, Save, Search, BookOpen, Utensils, CheckCircle2, Database, WifiOff, ExternalLink } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, onSnapshot, addDoc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -51,7 +51,7 @@ const App = () => {
   useEffect(() => {
     if (!auth) { 
       setAuthLoading(false); 
-      setError("Firebase 설정(VITE_FIREBASE_CONFIG)이 Vercel에 등록되지 않았습니다.");
+      setError("시스템 연결 설정(VITE_FIREBASE_CONFIG)이 누락되었습니다. 설정 탭을 확인하세요.");
       return; 
     }
     const initAuth = async () => {
@@ -63,7 +63,7 @@ const App = () => {
         }
       } catch (err) { 
         console.error("인증 실패:", err);
-        setError("시스템 인증에 실패했습니다.");
+        setError("인증 서버 연결에 실패했습니다.");
       } finally {
         setAuthLoading(false);
       }
@@ -103,14 +103,14 @@ const App = () => {
     return userSettings.geminiKey || getEnvVar('gemini_api_key') || "";
   }, [userSettings.geminiKey]);
 
-  // 4. 설정 저장 함수
+  // 4. 설정 저장 함수 (설정 누락 시 안내 로직 추가)
   const handleSaveSettings = async () => {
     if (!db) {
-      setError("Vercel 대시보드에서 VITE_FIREBASE_CONFIG 환경 변수를 설정해야 저장이 가능합니다.");
+      setError("Vercel 대시보드에서 환경 변수를 먼저 설정해야 저장이 가능합니다. 설정 탭 하단의 가이드를 보세요!");
       return;
     }
     if (!user) {
-      setError("사용자 인증 중입니다. 잠시만 기다려 주세요.");
+      setError("사용자 인증 대기 중입니다. 잠시 후 다시 시도하세요.");
       return;
     }
 
@@ -128,7 +128,7 @@ const App = () => {
       }, 1500);
     } catch (err) {
       console.error("저장 에러:", err);
-      setError("데이터베이스 저장에 실패했습니다. Firestore 규칙을 확인하세요.");
+      setError("데이터베이스 저장 권한 에러가 발생했습니다.");
       setSaveStatus('error');
     } finally {
       setLoading(false);
@@ -223,7 +223,7 @@ const App = () => {
   if (authLoading) return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4">
       <Loader2 className="animate-spin text-blue-600" size={48} />
-      <p className="font-black text-slate-400 text-xs uppercase tracking-widest text-center">지현이의 영양 매니저<br/>시스템 접속 중...</p>
+      <p className="font-black text-slate-400 text-xs uppercase tracking-widest text-center animate-pulse">지현이의 영양 매니저<br/>시스템 접속 중...</p>
     </div>
   );
 
@@ -254,8 +254,8 @@ const App = () => {
 
       <main className="max-w-[1100px] mx-auto">
         {error && (
-          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3 animate-pulse">
-            <AlertCircle size={18}/> {error}
+          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3 animate-in fade-in">
+            <AlertCircle size={18} className="shrink-0"/> {error}
           </div>
         )}
 
@@ -288,7 +288,7 @@ const App = () => {
                   </tbody>
                 </table>
               </div>
-            ) : <div className="bg-white p-24 rounded-[3.5rem] border-[4px] border-dashed border-slate-200 text-center space-y-4 shadow-inner"><ChefHat size={64} className="mx-auto text-slate-200"/><p className="font-black text-slate-300 uppercase tracking-widest">System Access Ready</p></div>}
+            ) : <div className="bg-white p-24 rounded-[3.5rem] border-[4px] border-dashed border-slate-200 text-center space-y-4 shadow-inner"><ChefHat size={64} className="mx-auto text-slate-200"/><p className="font-black text-slate-300 uppercase tracking-widest">SYSTEM ACCESS READY</p></div>}
           </div>
         )}
 
@@ -388,18 +388,35 @@ const App = () => {
                   </label>
                   <input type="password" value={userSettings.geminiKey} onChange={(e) => setUserSettings({...userSettings, geminiKey: e.target.value})} placeholder="API 키를 입력하세요" className="w-full px-8 py-5 rounded-3xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm transition-all focus:ring-2 focus:ring-blue-500" />
                 </div>
+                
+                {/* 데이터베이스 연결 여부에 따라 버튼 동작 변경 */}
                 <button 
                   onClick={handleSaveSettings} 
-                  disabled={loading || !user} 
-                  className="w-full py-5 bg-slate-900 text-white rounded-3xl font-black shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                  disabled={loading} 
+                  className={`w-full py-5 text-white rounded-3xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 ${db ? 'bg-slate-900 hover:bg-black' : 'bg-red-500 hover:bg-red-600'}`}
                 >
-                  {loading ? <Loader2 className="animate-spin" size={18}/> : <Save size={18}/>} 설정 저장하기
+                  {loading ? <Loader2 className="animate-spin" size={18}/> : db ? <Save size={18}/> : <AlertCircle size={18}/>} 
+                  {db ? "설정 저장하기" : "연결 문제 해결 방법 보기"}
                 </button>
-                <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 text-[10px] text-blue-600 leading-relaxed font-bold">
-                  ⚠️ Vercel 앱에서 저장이 안 된다면?<br/>
-                  반드시 Vercel 대시보드 {'→'} Settings {'→'} Environment Variables에 <br/>
-                  VITE_FIREBASE_CONFIG와 VITE_GEMINI_API_KEY를 등록해야 합니다.
-                </div>
+
+                {!db && (
+                  <div className="p-6 bg-red-50 rounded-3xl border-2 border-red-100 space-y-4 animate-in slide-in-from-top-2">
+                    <h4 className="font-black text-red-600 flex items-center gap-2 text-sm"><Info size={16}/> Vercel 앱에서 저장이 안 되는 이유</h4>
+                    <p className="text-[11px] text-slate-600 leading-relaxed font-bold">
+                      사이트는 배포되었지만, 데이터를 저장할 <span className="text-red-500">Firebase 설정</span>값이 Vercel에 전달되지 않았습니다.
+                    </p>
+                    <ol className="text-[10px] text-slate-500 space-y-2 list-decimal px-4 font-medium">
+                      <li>Vercel 대시보드 {'→'} <span className="font-bold">Settings</span> 클릭</li>
+                      <li><span className="font-bold text-blue-600">Environment Variables</span> 클릭</li>
+                      <li><span className="font-bold">Key</span>에 <code className="bg-slate-200 px-1 rounded">VITE_FIREBASE_CONFIG</code> 입력</li>
+                      <li><span className="font-bold">Value</span>에 Firebase JSON 전체를 붙여넣고 <span className="font-bold text-blue-600">Add</span> 클릭</li>
+                      <li>설정 후 반드시 다시 <span className="font-bold text-blue-600">Redeploy</span>(다시 배포)를 해야 합니다!</li>
+                    </ol>
+                    <a href="https://vercel.com/dashboard" target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 py-3 bg-white border border-red-200 rounded-2xl text-[11px] font-black text-red-500 hover:bg-red-50 transition-colors shadow-sm">
+                      Vercel 대시보드 바로가기 <ExternalLink size={14}/>
+                    </a>
+                  </div>
+                )}
               </div>
             </div>
           </div>
