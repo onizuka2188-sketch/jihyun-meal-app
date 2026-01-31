@@ -4,7 +4,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, onSnapshot, addDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
-// --- 환경 변수 로드 (Vercel 배포 시 필수 설정) ---
+// --- 환경 변수 로드 (안전한 접근 방식) ---
 const getEnvVar = (key) => {
   if (typeof window !== 'undefined' && window[key]) return window[key];
   try {
@@ -51,7 +51,6 @@ const App = () => {
   useEffect(() => {
     if (!auth) { 
       setAuthLoading(false); 
-      setError("시스템 연결 설정(VITE_FIREBASE_CONFIG)이 누락되었습니다. 설정 탭을 확인하세요.");
       return; 
     }
     const initAuth = async () => {
@@ -77,18 +76,21 @@ const App = () => {
   useEffect(() => {
     if (!user || !db) return;
 
+    // 히스토리 리스너
     const historyRef = collection(db, 'artifacts', appId, 'public', 'data', 'meal_history');
     const unsubHistory = onSnapshot(historyRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setHistoryList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     }, (err) => console.error("히스토리 로드 실패:", err));
 
+    // 레시피 리스너
     const recipeRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
     const unsubRecipes = onSnapshot(recipeRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setRecipeList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     }, (err) => console.error("레시피 로드 실패:", err));
 
+    // 설정 리스너
     const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -103,14 +105,14 @@ const App = () => {
     return userSettings.geminiKey || getEnvVar('gemini_api_key') || "";
   }, [userSettings.geminiKey]);
 
-  // 4. 설정 저장 함수 (설정 누락 시 안내 로직 추가)
+  // 4. 설정 저장 함수
   const handleSaveSettings = async () => {
     if (!db) {
-      setError("Vercel 대시보드에서 환경 변수를 먼저 설정해야 저장이 가능합니다. 설정 탭 하단의 가이드를 보세요!");
+      setError("시스템 설정(VITE_FIREBASE_CONFIG)이 필요합니다.");
       return;
     }
     if (!user) {
-      setError("사용자 인증 대기 중입니다. 잠시 후 다시 시도하세요.");
+      setError("사용자 인증 대기 중입니다.");
       return;
     }
 
@@ -128,8 +130,7 @@ const App = () => {
       }, 1500);
     } catch (err) {
       console.error("저장 에러:", err);
-      setError("데이터베이스 저장 권한 에러가 발생했습니다.");
-      setSaveStatus('error');
+      setError("데이터베이스 저장에 실패했습니다.");
     } finally {
       setLoading(false);
     }
@@ -229,7 +230,6 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 p-2 md:p-6 text-slate-900 print:bg-white print:p-0">
-      {/* --- 상단 네비게이션 --- */}
       <nav className="max-w-[1100px] mx-auto mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-[2.5rem] shadow-xl border border-white print:hidden">
         <div className="flex items-center gap-4">
           <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200"><Heart className="text-white w-6 h-6 fill-current" /></div>
@@ -254,12 +254,11 @@ const App = () => {
 
       <main className="max-w-[1100px] mx-auto">
         {error && (
-          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3 animate-in fade-in">
+          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold border border-red-100 flex items-center gap-3">
             <AlertCircle size={18} className="shrink-0"/> {error}
           </div>
         )}
 
-        {/* --- 식단표 탭 --- */}
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in duration-700">
             <div className="flex justify-between items-end px-4 print:hidden">
@@ -280,11 +279,11 @@ const App = () => {
                   </tr></thead>
                   <tbody className="divide-y-2 divide-slate-200">
                     <tr><td className="bg-slate-50 border-r-2 border-slate-200 font-black text-[11px] text-slate-400">아침</td>{weeklyPlan.map((day, i) => <td key={i} className="border-r-2 border-slate-200 last:border-r-0 align-top">{renderCell(day.breakfast)}</td>)}</tr>
-                    <tr className="bg-blue-50/20"><td className="border-r-2 border-slate-200 font-bold text-[10px] text-blue-400 italic text-center">粥</td><td colSpan="7" className="p-2.5 text-[12px] font-bold text-blue-800 tracking-widest text-center">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
+                    <tr className="bg-blue-50/20 font-bold text-[12px] text-blue-800 tracking-widest text-center"><td className="border-r-2 border-slate-200 text-[10px] text-blue-400 italic">粥</td><td colSpan="7" className="p-2.5">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
                     <tr><td className="bg-slate-50 border-r-2 border-slate-200 font-black text-[11px] text-slate-400">점심</td>{weeklyPlan.map((day, i) => <td key={i} className="border-r-2 border-slate-200 last:border-r-0 align-top">{renderCell(day.lunch, true)}</td>)}</tr>
-                    <tr className="bg-blue-50/20"><td className="border-r-2 border-slate-200 font-bold text-[10px] text-blue-400 italic text-center">粥</td><td colSpan="7" className="p-2.5 text-[12px] font-bold text-blue-800 tracking-widest text-center">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
+                    <tr className="bg-blue-50/20 font-bold text-[12px] text-blue-800 tracking-widest text-center"><td className="border-r-2 border-slate-200 text-[10px] text-blue-400 italic">粥</td><td colSpan="7" className="p-2.5">쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)</td></tr>
                     <tr><td className="bg-slate-50 border-r-2 border-slate-200 font-black text-[11px] text-slate-400">저녁</td>{weeklyPlan.map((day, i) => <td key={i} className="border-r-2 border-slate-200 last:border-r-0 align-top">{renderCell(day.dinner)}</td>)}</tr>
-                    <tr className="bg-rose-50/30"><td className="border-r-2 border-slate-200 font-bold text-[10px] text-rose-400 italic text-center uppercase">간식</td>{weeklyPlan.map((day, i) => <td key={i} className="p-4 border-r-2 border-slate-200 last:border-r-0 text-[12px] font-black text-rose-600 italic">{day.snack || "과일쥬스"}</td>)}</tr>
+                    <tr className="bg-rose-50/30 font-black text-[12px] text-rose-600 italic text-center"><td className="border-r-2 border-slate-200 text-[10px] text-rose-400 uppercase">간식</td>{weeklyPlan.map((day, i) => <td key={i} className="p-4 border-r-2 border-slate-200 last:border-r-0">{day.snack || "과일쥬스"}</td>)}</tr>
                   </tbody>
                 </table>
               </div>
@@ -292,7 +291,6 @@ const App = () => {
           </div>
         )}
 
-        {/* --- 히스토리 탭 --- */}
         {activeTab === 'history' && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 animate-in slide-in-from-right-4">
             {historyList.map((h, i) => (
@@ -312,7 +310,6 @@ const App = () => {
           </div>
         )}
 
-        {/* --- 레시피 탭 --- */}
         {activeTab === 'recipes' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
             <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100">
@@ -347,14 +344,12 @@ const App = () => {
                       <span className="text-[10px] text-slate-300 font-bold">{r.createdAt ? new Date(r.createdAt.seconds * 1000).toLocaleDateString() : '...'}</span>
                     </div>
                   ))}
-                  {recipeList.length === 0 && <p className="text-center py-10 text-slate-300 text-xs font-bold italic">기록된 레시피가 없습니다.</p>}
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* --- 설정 탭 --- */}
         {activeTab === 'settings' && (
           <div className="max-w-xl mx-auto py-12 animate-in zoom-in">
             <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-slate-100 relative overflow-hidden">
@@ -362,7 +357,7 @@ const App = () => {
                 <div className="absolute inset-0 bg-blue-600/95 flex flex-col items-center justify-center text-white z-20 animate-in fade-in duration-300 text-center px-6">
                   <CheckCircle2 size={64} className="mb-4 animate-bounce" />
                   <p className="text-2xl font-black">설정 저장 완료!</p>
-                  <p className="text-sm opacity-80 mt-2 font-bold">식단표 화면으로 이동하여 생성해 보세요.</p>
+                  <p className="text-sm opacity-80 mt-2 font-bold">식단표 화면으로 이동합니다.</p>
                 </div>
               )}
               
@@ -389,32 +384,20 @@ const App = () => {
                   <input type="password" value={userSettings.geminiKey} onChange={(e) => setUserSettings({...userSettings, geminiKey: e.target.value})} placeholder="API 키를 입력하세요" className="w-full px-8 py-5 rounded-3xl bg-slate-50 border-none font-bold shadow-inner outline-none text-sm transition-all focus:ring-2 focus:ring-blue-500" />
                 </div>
                 
-                {/* 데이터베이스 연결 여부에 따라 버튼 동작 변경 */}
-                <button 
-                  onClick={handleSaveSettings} 
-                  disabled={loading} 
-                  className={`w-full py-5 text-white rounded-3xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 ${db ? 'bg-slate-900 hover:bg-black' : 'bg-red-500 hover:bg-red-600'}`}
-                >
+                <button onClick={handleSaveSettings} disabled={loading} className={`w-full py-5 text-white rounded-3xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 ${db ? 'bg-slate-900 hover:bg-black' : 'bg-red-500 hover:bg-red-600'}`}>
                   {loading ? <Loader2 className="animate-spin" size={18}/> : db ? <Save size={18}/> : <AlertCircle size={18}/>} 
-                  {db ? "설정 저장하기" : "연결 문제 해결 방법 보기"}
+                  {db ? "설정 저장하기" : "연결 필요"}
                 </button>
 
                 {!db && (
                   <div className="p-6 bg-red-50 rounded-3xl border-2 border-red-100 space-y-4 animate-in slide-in-from-top-2">
-                    <h4 className="font-black text-red-600 flex items-center gap-2 text-sm"><Info size={16}/> Vercel 앱에서 저장이 안 되는 이유</h4>
-                    <p className="text-[11px] text-slate-600 leading-relaxed font-bold">
-                      사이트는 배포되었지만, 데이터를 저장할 <span className="text-red-500">Firebase 설정</span>값이 Vercel에 전달되지 않았습니다.
-                    </p>
+                    <h4 className="font-black text-red-600 flex items-center gap-2 text-sm"><Info size={16}/> Vercel 설정 가이드</h4>
                     <ol className="text-[10px] text-slate-500 space-y-2 list-decimal px-4 font-medium">
-                      <li>Vercel 대시보드 {'→'} <span className="font-bold">Settings</span> 클릭</li>
-                      <li><span className="font-bold text-blue-600">Environment Variables</span> 클릭</li>
-                      <li><span className="font-bold">Key</span>에 <code className="bg-slate-200 px-1 rounded">VITE_FIREBASE_CONFIG</code> 입력</li>
-                      <li><span className="font-bold">Value</span>에 Firebase JSON 전체를 붙여넣고 <span className="font-bold text-blue-600">Add</span> 클릭</li>
-                      <li>설정 후 반드시 다시 <span className="font-bold text-blue-600">Redeploy</span>(다시 배포)를 해야 합니다!</li>
+                      <li>Vercel 대시보드 {'→'} <span className="font-bold">Settings</span></li>
+                      <li><span className="font-bold text-blue-600">Environment Variables</span></li>
+                      <li><span className="font-bold">Key</span>: <code className="bg-slate-200 px-1 rounded">VITE_FIREBASE_CONFIG</code></li>
+                      <li><span className="font-bold text-blue-600">Add</span> 클릭 후 반드시 다시 배포하세요!</li>
                     </ol>
-                    <a href="https://vercel.com/dashboard" target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 py-3 bg-white border border-red-200 rounded-2xl text-[11px] font-black text-red-500 hover:bg-red-50 transition-colors shadow-sm">
-                      Vercel 대시보드 바로가기 <ExternalLink size={14}/>
-                    </a>
                   </div>
                 )}
               </div>
