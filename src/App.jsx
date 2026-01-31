@@ -4,7 +4,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, onSnapshot, addDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
-// --- 환경 변수 관리 (Rule 1 & Global Variables) ---
+// --- 환경 변수 관리 (Vercel 배포 및 Canvas 미리보기 공용) ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'jihyun-hospital-app';
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -26,7 +26,7 @@ const App = () => {
   const [userSettings, setUserSettings] = useState({ geminiKey: "" });
   const [error, setError] = useState(null);
 
-  // 1. 인증 로직 (Rule 3 준수: Auth First)
+  // 1. 인증 로직: 로그인이 완료된 후 데이터를 가져오기 위함 (Rule 3)
   useEffect(() => {
     if (!auth) return;
 
@@ -49,29 +49,25 @@ const App = () => {
     return () => unsubscribe();
   }, []);
 
-  // 2. 데이터 리스너 (Rule 1 & 3 준수: Guard with user check)
+  // 2. 데이터 리스너: 사용자가 인증된 후에만 실행하여 권한 오류 방지 (Rule 1 & 3)
   useEffect(() => {
-    // 사용자가 인증될 때까지 기다림 (Permission Denied 방지 핵심)
     if (!user || !db) return;
 
-    // 히스토리 리스너 (Rule 1 경로)
     const historyRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'meal_history');
     const unsubHistory = onSnapshot(historyRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // 클라이언트 측 정렬 (Rule 2)
       setHistory(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     }, (err) => {
-      console.error("Firestore history listener error:", err);
+      console.error("Firestore history error:", err);
     });
 
-    // 개인 설정 리스너 (Rule 1 경로)
     const settingsRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists()) {
         setUserSettings(docSnap.data());
       }
     }, (err) => {
-      console.error("Firestore settings listener error:", err);
+      console.error("Firestore settings error:", err);
     });
 
     return () => {
@@ -126,7 +122,6 @@ const App = () => {
       setWeeklyPlan(data.days);
       
       if (db && user) {
-        // Rule 1 경로 준수
         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'meal_history'), { 
           plan: data.days, 
           createdAt: serverTimestamp(),
@@ -151,14 +146,14 @@ const App = () => {
   );
 
   return (
-    <div className="min-h-screen bg-[#f3f4f6] p-2 md:p-6">
+    <div className="min-h-screen bg-[#f3f4f6] p-2 md:p-6 text-slate-900">
       {/* 상단 헤더 */}
-      <div className="max-w-[1200px] mx-auto mb-6 flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+      <div className="max-w-[1200px] mx-auto mb-6 flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
         <div className="flex items-center gap-3">
           <div className="bg-blue-600 p-2.5 rounded-2xl shadow-lg"><Heart className="text-white w-6 h-6 fill-current" /></div>
           <div>
-            <h1 className="text-xl font-black text-slate-800 tracking-tight">지현이를 위한 <span className="text-blue-600">병원 식단 매니저</span></h1>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Premium Hospital Meal Grid System</p>
+            <h1 className="text-xl font-black text-slate-800 tracking-tight leading-none">지현이를 위한 <span className="text-blue-600">병원 식단 매니저</span></h1>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Premium Hospital Meal Grid System</p>
           </div>
         </div>
         <div className="flex bg-slate-100 p-1 rounded-2xl">
@@ -166,7 +161,7 @@ const App = () => {
             <button 
               key={t} 
               onClick={() => setActiveTab(t)} 
-              className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${activeTab === t ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}
+              className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${activeTab === t ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
             >
               {t === 'planner' ? '식단표' : t === 'history' ? '히스토리' : '설정'}
             </button>
@@ -176,7 +171,7 @@ const App = () => {
 
       <main className="max-w-[1200px] mx-auto">
         {error && (
-          <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
+          <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold flex items-center gap-2 border border-red-100 animate-in fade-in">
             <AlertCircle size={16}/> {error}
           </div>
         )}
@@ -190,16 +185,16 @@ const App = () => {
               <button 
                 onClick={generateWeeklyPlan} 
                 disabled={loading || !user} 
-                className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
+                className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all flex items-center gap-2 disabled:opacity-50 active:scale-95"
               >
                 {loading ? <Loader2 className="animate-spin" size={16}/> : <RefreshCw size={16}/>} AI 자동 식단 생성
               </button>
             </div>
 
             {!user ? (
-              <div className="bg-white p-20 rounded-[3rem] text-center text-slate-400 font-bold">
+              <div className="bg-white p-20 rounded-[3rem] text-center text-slate-400 border border-slate-200">
                 <Loader2 className="animate-spin mx-auto mb-2" />
-                사용자 인증 중...
+                <p className="font-bold">시스템 인증 중...</p>
               </div>
             ) : weeklyPlan ? (
               <div className="bg-white border-2 border-slate-300 shadow-2xl overflow-x-auto rounded-sm">
@@ -221,7 +216,7 @@ const App = () => {
                     </tr>
                     <tr className="bg-blue-50/50">
                       <td className="border-r-2 border-slate-200 font-bold text-[10px] text-blue-400 italic">죽</td>
-                      <td colSpan="7" className="p-1 text-[11px] font-bold text-blue-700 tracking-widest bg-blue-50/30">
+                      <td colSpan="7" className="p-1 text-[11px] font-bold text-blue-700 tracking-widest bg-blue-50/20">
                         쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)
                       </td>
                     </tr>
@@ -231,7 +226,7 @@ const App = () => {
                     </tr>
                     <tr className="bg-blue-50/50">
                       <td className="border-r-2 border-slate-200 font-bold text-[10px] text-blue-400 italic">죽</td>
-                      <td colSpan="7" className="p-1 text-[11px] font-bold text-blue-700 tracking-widest bg-blue-50/30">
+                      <td colSpan="7" className="p-1 text-[11px] font-bold text-blue-700 tracking-widest bg-blue-50/20">
                         쇠고기야채죽 / 흰죽 + (간장, 물김치, 맑은국)
                       </td>
                     </tr>
@@ -264,7 +259,7 @@ const App = () => {
         {activeTab === 'history' && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in slide-in-from-right-4 duration-500">
             {history.map((h, i) => (
-              <div key={h.id} className="bg-white p-6 rounded-[2rem] shadow-lg border border-slate-200 hover:border-blue-400 transition-all group">
+              <div key={h.id} className="bg-white p-6 rounded-[2.5rem] shadow-lg border border-slate-200 hover:border-blue-400 transition-all group">
                 <div className="flex justify-between items-start mb-4">
                   <span className="text-[10px] font-black text-blue-500 bg-blue-50 px-3 py-1 rounded-full uppercase tracking-widest">{i === 0 ? "최근 기록" : `${i+1}번째 기록`}</span>
                   <span className="text-[10px] text-slate-300 font-bold">{h.createdAt ? new Date(h.createdAt.seconds * 1000).toLocaleDateString() : '...'}</span>
@@ -276,13 +271,13 @@ const App = () => {
                 <button onClick={() => {setWeeklyPlan(h.plan); setActiveTab('planner');}} className="w-full py-3 bg-slate-50 group-hover:bg-blue-600 group-hover:text-white text-slate-500 rounded-xl text-xs font-black transition-all shadow-sm active:scale-95">식단표 불러오기</button>
               </div>
             ))}
-            {history.length === 0 && <div className="col-span-full py-20 text-center text-slate-400 font-bold animate-pulse">기록이 없습니다.</div>}
+            {history.length === 0 && <div className="col-span-full py-20 text-center text-slate-400 font-bold animate-pulse">저장된 기록이 없습니다.</div>}
           </div>
         )}
 
         {activeTab === 'settings' && (
           <div className="max-w-xl mx-auto animate-in zoom-in duration-300">
-            <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-rose-100">
+            <div className="bg-white p-10 rounded-[2.5rem] shadow-xl border border-rose-100">
               <div className="flex items-center gap-3 mb-8">
                 <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-100"><Key className="text-white" size={20}/></div>
                 <div><h3 className="text-xl font-black text-slate-800 tracking-tight">서비스 설정</h3><p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">System Configuration</p></div>

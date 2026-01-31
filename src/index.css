@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>사랑하는 지현이의 영양 매니저</title>
-    <!-- 디자인(Tailwind CSS)을 강제로 입혀주는 코드입니다. 절대 지우지 마세요! -->
+    <!-- 이 코드가 디자인(Tailwind)을 강제로 입혀줍니다. -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap');
-      body { font-family: 'Noto Sans KR', sans-serif; }
+      body { font-family: 'Noto Sans KR', sans-serif; background-color: #f3f4f6; }
     </style>
   </head>
   <body>
